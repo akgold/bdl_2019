@@ -1,0 +1,103 @@
+---
+title: "Push Compute to Server"
+author: "Alex Gold"
+date: "11/7/2019"
+output: html_document
+---
+```{r}
+library(DBI)
+library(glue)
+library(dplyr)
+```
+
+```{r}
+con <- dbConnect(odbc::odbc(), 
+                 Driver="postgresql", 
+                 Server = "localhost", 
+                 Port = "5432", 
+                 Database = "postgres", 
+                 UID = "postgres", 
+                 PWD = Sys.getenv("db_pass"), 
+                 BoolsAsChar = "", 
+                 timeout = 10)
+dbExecute(con, "SET search_path=london;")
+```
+Use `dplyr` to do computation.
+```{r}
+df <- tbl(con, "plan")
+```
+
+Push Compute to Server 1: Pull smallest set possible into db.
+```{r}
+(df %>%
+   group_by(permission_type) %>%
+   summarize(n(), 
+             mean(total_time), 
+             median(total_time), 
+             sd(total_time)) %>%
+   collect())
+```
+
+It's way faster.
+```{r}
+time_bad <- system.time(
+  df %>%
+    # Import data first = bad
+    collect() %>%
+    group_by(permission_type) %>%
+    summarize(mean(total_time), 
+              median(total_time), 
+              sd(total_time))
+)
+
+time_good <- system.time(
+  df %>%
+    group_by(permission_type) %>%
+    summarize(mean(total_time), 
+              median(total_time), 
+              sd(total_time)) %>%
+    # Import at end = good
+    collect()
+)
+
+
+time_bad
+time_good
+```
+
+Push compute to server 2: Use packages to do work.
+
+Dbplot
+```{r}
+dbplot::dbplot_line(df,
+                    x = permission_financial_year,
+                    y = mean(proposed_total_floorspace)) +
+  xlab("Year") +
+  ylab("Average Floorspace") +
+  scale_y_continuous(labels = scales::comma) +
+  ggthemes::theme_few()
+  
+```
+
+modeldb
+```{r}
+pa <- df %>%
+  pull(planning_authority) %>%
+  unique()
+pt <- df %>%
+  pull(permission_type) %>%
+  unique()
+months <- df %>%
+  pull(start_month) %>%
+  unique()
+
+lin_reg <- df %>%
+  select(total_time, 
+         start_month, 
+         proposed_total_floorspace, 
+         permission_type) %>%
+  modeldb::add_dummy_variables(start_month, auto_values = TRUE) %>%
+  modeldb::add_dummy_variables(permission_type, 
+                               auto_values = TRUE) %>%
+  modeldb::linear_regression_db(total_time, auto_count = TRUE)
+```

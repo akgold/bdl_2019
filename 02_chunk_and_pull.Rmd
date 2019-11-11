@@ -1,0 +1,71 @@
+---
+title: 'Big Data Strategy 2: Chunk and Pull'
+author: "Alex Gold"
+date: "11/7/2019"
+output: html_document
+---
+```{r}
+library(DBI)
+library(glue)
+library(dplyr)
+library(ggplot2)
+```
+
+```{r}
+con <- dbConnect(odbc::odbc(), 
+                 Driver="postgresql", 
+                 Server = "localhost", 
+                 Port = "5432", 
+                 Database = "postgres", 
+                 UID = "postgres", 
+                 PWD = Sys.getenv("db_pass"), 
+                 BoolsAsChar = "", 
+                 timeout = 10)
+dbExecute(con, "SET search_path=london;")
+```
+
+Take a look at the different planning authorities.
+```{r}
+(pas <- dbGetQuery(con, 
+                   "SELECT 
+                planning_authority, 
+                COUNT(*) AS n
+              FROM plan 
+              GROUP BY 1
+              ORDER BY n DESC;"))
+```
+
+Create a plotting function to run on each.
+```{r}
+plot_fn <- function(dat) {
+  ggplot(dat) +
+    geom_point(aes(x = total_time, 
+                   y = proposed_total_floorspace)) +
+    geom_abline(slope = 1, intercept = 0) +
+    ggthemes::theme_fivethirtyeight() +
+    xlab("Planning to Completion Time, Days") +
+    ylab("Proposed Total Floorspace")
+}
+
+# To loop over each planning authority
+run_fn <- function(pa) {
+  df <- dbGetQuery(con, 
+                   glue::glue("SELECT 
+                    planning_authority, 
+                    total_time, 
+                    proposed_total_floorspace 
+                   FROM plan
+                   WHERE planning_authority = '{pa}';"))
+  plot_fn(df)
+  pa <- tolower(pa) %>% 
+    stringr::str_replace(" ", "_") %>%
+    stringr::str_remove_all("(|)")
+  ggsave(here::here(glue::glue("plots/plot_{pa}.png")))
+}
+```
+
+Create plots and save
+```{r}
+purrr::walk(pas$planning_authority, run_fn)
+```
+

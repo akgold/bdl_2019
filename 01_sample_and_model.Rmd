@@ -1,0 +1,100 @@
+---
+title: "Big Data Strategy 1: Sample and Model"
+author: "Alex Gold"
+date: "11/6/2019"
+output: html_document
+---
+
+```{r}
+library(DBI)
+library(glue)
+library(rsample)
+```
+
+```{r}
+con <- dbConnect(odbc::odbc(), 
+                 Driver="postgresql", 
+                 Server = "localhost", 
+                 Port = "5432", 
+                 Database = "postgres", 
+                 UID = "postgres", 
+                 PWD = Sys.getenv("db_pass"), 
+                 BoolsAsChar = "", 
+                 timeout = 10)
+dbExecute(con, "SET search_path=london;")
+```
+
+# Strategy 1: Sample and Model
+SQL interaction 1: SQL chunk in Rmarkdown
+```{sql, connection = con, output.var = "df"}
+SELECT 
+  start_month
+  , proposed_total_residential_units
+  , proposed_total_bedrooms
+  , permission_financial_year
+  , permission_type 
+FROM plan
+ORDER BY random()
+LIMIT 500;
+```
+
+Let's model whether it took more than 5 years to finish a property.
+```{r}
+df %>%
+  ggplot(aes(x = total_time)) +
+  geom_density() +
+  xlab("Permission to Completion, Days") +
+  geom_vline(xintercept = 365 * 5) +
+  scale_x_continuous(labels = scales::comma) +
+  scale_y_continuous(labels = scales::percent) +
+  geom_label(aes(x = 365 * 5, y = 0.0005, label = "5 Years"))
+
+df <- df %>%
+  mutate(gr_5 = total_time > 365 * 5, 
+         gr_5 = ifelse(is.na(gr_5), TRUE, gr_5))
+```
+
+Use rsample to do 10-fold CV.
+```{r}
+folds <- rsample::vfold_cv(df, strata = "gr_5")
+mod_form <- as.formula(gr_5 ~ start_month + 
+                         proposed_total_residential_units +
+                         proposed_total_bedrooms + 
+                         permission_financial_year + 
+                         permission_type)
+```
+
+A function to run models across splits; cribbed from [tidymodels](http://tidymodels.github.io/rsample).
+```{r}
+## splits will be the `rsplit` object with the 90/10 partition
+holdout_results <- function(splits, mod_form) {
+  # Fit the model to the 90%
+  train_dat <- analysis(splits)
+  mod <- glm(mod_form, data = train_dat, family = binomial)
+  # Save the 10%
+  res <- assessment(splits) %>%
+    # Get rid of new factor levels (THIS IS BAD, DON'T DO THIS)
+    filter(permission_type %in% unique(train_dat$permission_type)) 
+  # Add fitted values 
+  res$.fitted <- predict(mod, newdata = res)
+  # Class predictions on the assessment set from class probs
+  # They're log-odds, so >0 -> TRUE
+  res$preds <- ifelse(res$.fitted > 0, TRUE, FALSE)
+  # Calculate whether the prediction was correct
+  res$correct <- res$preds == res$gr_5
+  # Return the assessment data set with the additional columns
+  res
+}
+```
+
+Run the model on the folds
+```{r}
+mods <- purrr::map(folds$splits, holdout_results, mod_form)
+```
+
+Get OOS model quality metrics.
+```{r}
+(baseline <- mean(df$gr_5))
+acc <- purrr::map_dbl(mods, function(x) mean(x$correct, na.rm = TRUE))
+summary(acc)
+```

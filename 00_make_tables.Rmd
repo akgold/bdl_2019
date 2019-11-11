@@ -1,0 +1,95 @@
+---
+title: "Create Table"
+author: "Alex Gold"
+date: "11/6/2019"
+output: html_document
+---
+
+```{r}
+library(DBI)
+library(dplyr)
+library(magrittr)
+library(lubridate)
+```
+
+```{r}
+con <- dbConnect(odbc::odbc(), 
+                 Driver="postgresql", 
+                 Server = "localhost", 
+                 Port = "5432", 
+                 Database = "postgres", 
+                 UID = "postgres", 
+                 PWD = Sys.getenv("db_pass"), 
+                 BoolsAsChar = "", 
+                 timeout = 10)
+dbExecute(con, "SET search_path=london;")
+```
+
+```{r}
+# Date Helper
+de <- function(x) as.numeric(x) %>% as.Date(origin = "1900-01-01")
+```
+
+```{r, read}
+df_raw <- readr::read_csv(here::here("data/raw_data.csv"))
+```
+
+# Clean
+```{r, clean}
+df_raw %<>%
+  mutate(permission_date = de(permission_date),
+         work_start_date = de(date_work_commenced_on_site_started_date),
+         work_complete_date = de(date_construction_completed_completed_date),
+         date_permission_expires_if_work_not_commenced_lapsed_date = de(date_permission_expires_if_work_not_commenced_lapsed_date), 
+         permission_type = case_when(stringr::str_detect(permission_type, "Prior") ~ "Prior Approval", 
+                                     TRUE ~ permission_type)) %>%
+  mutate_at(vars(ends_with("financial_year")),
+            function(x) x %>% substr(3, 6) %>% as.numeric()) %>%
+  mutate_at(24:ncol(df_raw), as.numeric) %>%
+  filter(!is.na(proposed_total_floorspace), 
+         permission_financial_year %in% 2000:2019, 
+         started_financial_year > 1970, 
+         !stringr::str_detect(permission_type, "Circular|S106")) 
+```
+
+# Create analysis fields
+```{r}
+df <- df_raw %>%
+  transmute(
+    start_time = as.integer(work_start_date - permission_date), 
+    work_time = as.integer(work_complete_date - work_start_date), 
+    total_time = as.integer(work_complete_date - permission_date), 
+    start_month = month(work_start_date), 
+    proposed_total_residential_units, 
+    proposed_total_bedrooms, 
+    proposed_total_bedrooms, 
+    proposed_total_floorspace,
+    existing_total_residential_units, 
+    permission_financial_year,
+    post_code, 
+    permission_type, 
+    planning_authority
+    # ,
+    # development_description
+  )
+```
+
+# Write
+```{r, write}
+
+dbWriteTable(con, "plan", df, overwrite = TRUE)
+
+# 
+# out_file <- here::here("cleaned_data")
+# readr::write_csv(df, out_file)
+# 
+# dbSendQuery(con, "DROP TABLE IF EXISTS plan;")
+# 
+# dat_types <- dbDataType(con, df)
+# dat_types <- glue::glue("{names(dat_types)} {dat_types}") %>%
+#   paste0(collapse = ", ")
+# dbSendQuery(con, "CREATE TABLE plan ({dat_types});")
+# dbSendQuery(con, glue::glue("COPY plan FROM '{out_file}' 
+#                             DELIMITER ',' CSV HEADER;"))
+```
+
