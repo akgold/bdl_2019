@@ -9,6 +9,8 @@ output: html_document
 library(DBI)
 library(glue)
 library(rsample)
+library(ggplot2)
+library(dplyr)
 ```
 
 ```{r}
@@ -24,6 +26,24 @@ con <- dbConnect(odbc::odbc(),
 dbExecute(con, "SET search_path=london;")
 ```
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 # Strategy 1: Sample and Model
 SQL interaction 1: SQL chunk in Rmarkdown
 ```{sql, connection = con, output.var = "df"}
@@ -33,12 +53,31 @@ SELECT
   , proposed_total_bedrooms
   , permission_financial_year
   , permission_type 
+  , total_time
 FROM plan
 ORDER BY random()
 LIMIT 500;
 ```
 
-Let's model whether it took more than 5 years to finish a property.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Time to property finish.
 ```{r}
 df %>%
   ggplot(aes(x = total_time)) +
@@ -48,11 +87,41 @@ df %>%
   scale_x_continuous(labels = scales::comma) +
   scale_y_continuous(labels = scales::percent) +
   geom_label(aes(x = 365 * 5, y = 0.0005, label = "5 Years"))
+```
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Target for Modeling
+```{r}
 df <- df %>%
   mutate(gr_5 = total_time > 365 * 5, 
+         # BAD IMPUTATION
          gr_5 = ifelse(is.na(gr_5), TRUE, gr_5))
 ```
+
+
+
+
+
+
+
+
+
+
+
 
 Use rsample to do 10-fold CV.
 ```{r}
@@ -94,7 +163,7 @@ mods <- purrr::map(folds$splits, holdout_results, mod_form)
 
 Get OOS model quality metrics.
 ```{r}
-(baseline <- mean(df$gr_5))
+(baseline <- mean(df$gr_5) %>% scales::percent())
 acc <- purrr::map_dbl(mods, function(x) mean(x$correct, na.rm = TRUE))
 summary(acc)
 ```

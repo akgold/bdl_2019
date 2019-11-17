@@ -16,10 +16,16 @@ con <- dbConnect(odbc::odbc(),
 dbExecute(con, "SET search_path=london;")
 df <- tbl(con, "plan")
 
-choices <- list(
+time_choices <- list(
     `Total Time` = "total_time",
     `Planning to Start Time` = "start_time",
     `Start to Completion Time` = "work_time"
+)
+
+other_choices <- list(
+    `Total Units Proposed` = "proposed_total_residential_units",
+    `Total Bedrooms Proposed` = "proposed_total_bedrooms",
+    `Total Floorspace Proposed` = "proposed_total_floorspace"
 )
 
 # Define UI for application that draws a histogram
@@ -31,10 +37,14 @@ ui <- fluidPage(
     # Sidebar with a slider input for number of bins
     sidebarLayout(
         sidebarPanel(
-            selectInput("var",
-                        "Which Variable?",
-                        choices = choices,
+            selectInput("var1",
+                        "Which Time Variable?",
+                        choices = time_choices,
                         selected = "Total"),
+            selectInput("var2",
+                        "Which other variable?",
+                        choices = other_choices,
+                        selected = "Total Floorspace Proposed"),
             selectInput("pa",
                         "Planning Authority",
                         choices = "",
@@ -43,7 +53,7 @@ ui <- fluidPage(
 
         # Show a plot of the generated distribution
         mainPanel(
-            plotOutput("timePlot")
+            plotOutput("plot")
         )
     )
 )
@@ -53,12 +63,13 @@ server <- function(input, output, session) {
 
     # Get choices for pa from data
     all_pa <- df %>%
-        pull(planning_authority) %>%
-        unique()
+        count(planning_authority) %>%
+        pull(planning_authority)
 
     # Update input dropdown
     updateSelectInput(session, "pa",
-                      choices = c("All", all_pa))
+                      choices = c("All", all_pa),
+                      selected = "All")
 
     # Process to allow ALL
     pa <- reactive(ifelse(input$pa == "All", all_pa, input$pa))
@@ -74,24 +85,38 @@ server <- function(input, output, session) {
             filter(planning_authority %in% pa)
     })
 
-    output$timePlot <- renderPlot({
+    output$plot <- renderPlot({
         req(dat())
 
-        var <- as.symbol(input$var)
+        # rlang magic
+        time_var <- as.symbol(input$var1)
+        other_var <- as.symbol(input$var2)
 
-        mean <- dat() %>%
-            summarize(m = mean(!!var)) %>%
-            pull(m)
+        # PUSH SUMMARIZATION TO DATA
+        means <- dat() %>%
+            summarize(mean1 = mean(!!time_var),
+                      mean2 = mean(!!other_var)) %>%
+            collect()
+        mean1 <- means$mean1
+        mean2 <- means$mean2
 
-        ggplot(dat()) +
-            geom_density(aes(x = !!var)) +
-            xlab(paste(names(choices[choices == input$var]), "(Days)")) +
-            ylab("Density") +
-            scale_y_continuous(labels = scales::percent) +
-            geom_vline(xintercept = mean) +
-            geom_label(aes(x = mean, y = 0.0003,
-                           label = glue::glue("Mean: {round(mean)}"))) +
-            ggthemes::theme_clean()
+        x_name <- names(time_choices[time_choices == input$var1])
+        y_name <- names(other_choices[other_choices == input$var2])
+
+        # PUSH PLOTTING TO DATA
+        dbplot::dbplot_raster(dat(),
+                              x = !!time_var,
+                              y = !!other_var) +
+            xlab(x_name) +
+            ylab(y_name) +
+            ggthemes::theme_clean() +
+            scale_fill_gradient(low = "#ffffff", high = "#5782b2") +
+            geom_vline(xintercept = mean1) +
+            geom_hline(yintercept = mean2) +
+            scale_y_log10(labels = scales::comma) +
+            scale_x_log10(labels = scales::comma) +
+            geom_label(aes(x = mean1, y = mean2/2, label = glue::glue("Mean: {mean1}"))) +
+            geom_label(aes(x = mean1/2, y = mean2, label = glue::glue("Mean: {mean2}")))
     })
 }
 

@@ -24,27 +24,63 @@ con <- dbConnect(odbc::odbc(),
 dbExecute(con, "SET search_path=london;")
 ```
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 Take a look at the different planning authorities.
 ```{r}
 (pas <- dbGetQuery(con, 
                    "SELECT 
-                planning_authority, 
-                COUNT(*) AS n
-              FROM plan 
-              GROUP BY 1
-              ORDER BY n DESC;"))
+                     planning_authority, 
+                    COUNT(*) AS n
+                    FROM plan 
+                    GROUP BY 1
+                    ORDER BY n DESC;"))
 ```
 
-Create a plotting function to run on each.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Plot total time against proposed total floorspace. 
 ```{r}
 plot_fn <- function(dat) {
   ggplot(dat) +
     geom_point(aes(x = total_time, 
                    y = proposed_total_floorspace)) +
     geom_abline(slope = 1, intercept = 0) +
-    ggthemes::theme_fivethirtyeight() +
+    ggthemes::theme_clean() +
     xlab("Planning to Completion Time, Days") +
-    ylab("Proposed Total Floorspace")
+    ylab("Proposed Total Floorspace") +
+    scale_y_log10() +
+    scale_x_log10() +
+    geom_smooth(aes(x = total_time, 
+                    y = proposed_total_floorspace))
 }
 
 # To loop over each planning authority

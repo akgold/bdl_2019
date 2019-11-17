@@ -22,21 +22,63 @@ con <- dbConnect(odbc::odbc(),
                  timeout = 10)
 dbExecute(con, "SET search_path=london;")
 ```
+
+
+
+
+
+
+
 Use `dplyr` to do computation.
 ```{r}
-df <- tbl(con, "plan")
+(df <- tbl(con, "plan"))
 ```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 Push Compute to Server 1: Pull smallest set possible into db.
 ```{r}
-(df %>%
-   group_by(permission_type) %>%
-   summarize(n(), 
-             mean(total_time), 
-             median(total_time), 
-             sd(total_time)) %>%
-   collect())
+time <- system.time(
+  dat <- df %>%
+    group_by(permission_type) %>%
+    summarize(n(), 
+              mean(total_time), 
+              median(total_time), 
+              sd(total_time)) %>%
+    collect()
+)
+dat
 ```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 It's way faster.
 ```{r}
@@ -50,22 +92,42 @@ time_bad <- system.time(
               sd(total_time))
 )
 
-time_good <- system.time(
-  df %>%
-    group_by(permission_type) %>%
-    summarize(mean(total_time), 
-              median(total_time), 
-              sd(total_time)) %>%
-    # Import at end = good
-    collect()
-)
-
-
+time
 time_bad
-time_good
 ```
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 Push compute to server 2: Use packages to do work.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 Dbplot
 ```{r}
@@ -75,29 +137,80 @@ dbplot::dbplot_line(df,
   xlab("Year") +
   ylab("Average Floorspace") +
   scale_y_continuous(labels = scales::comma) +
-  ggthemes::theme_few()
-  
+  ggthemes::theme_clean()
 ```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 modeldb
 ```{r}
-pa <- df %>%
-  pull(planning_authority) %>%
-  unique()
-pt <- df %>%
-  pull(permission_type) %>%
-  unique()
-months <- df %>%
-  pull(start_month) %>%
-  unique()
-
-lin_reg <- df %>%
+(lin_reg <- df %>%
   select(total_time, 
          start_month, 
-         proposed_total_floorspace, 
-         permission_type) %>%
+         proposed_total_floorspace) %>%
   modeldb::add_dummy_variables(start_month, auto_values = TRUE) %>%
-  modeldb::add_dummy_variables(permission_type, 
-                               auto_values = TRUE) %>%
-  modeldb::linear_regression_db(total_time, auto_count = TRUE)
+  modeldb::linear_regression_db(total_time, auto_count = TRUE))
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Write predictions back to data and get RMSE
+```{r}
+(non_months <- glue::glue(
+  "UPDATE plan
+  SET pred_total_time = {lin_reg$`(Intercept)`} +
+  {lin_reg$proposed_total_floorspace} + proposed_total_floorspace;"))
+
+dbSendQuery(con, "ALTER TABLE plan DROP COLUMN IF EXISTS pred_total_time;")
+dbSendQuery(con, "ALTER TABLE plan ADD COLUMN pred_total_time numeric;")
+dbSendQuery(con, non_months)
+
+
+months <- stringr::str_match(names(lin_reg), "start_month_(\\d+)")[,2] %>%
+  purrr::keep(~!is.na(.))
+
+month_sql <- "UPDATE plan
+    SET pred_total_time = pred_total_time + {month_val}
+    WHERE start_month = {month};"
+
+purrr::walk(months, function(month) {
+  month_val <- lin_reg[[paste0("start_month_", month)]]
+  dbGetQuery(con, glue::glue(month_sql))
+})
+```
+
+
+
+
+
+
+Compute RMSE
+```{r}
+df %>%
+  summarize(rmse = sqrt(mean((pred_total_time - total_time)^2)))
 ```
